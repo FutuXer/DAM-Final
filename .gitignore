@@ -1,0 +1,31 @@
+# 数据文件 (过大，不上传)
+data/raw/*.csv
+data/raw/*.zip
+data/processed/*.csv
+data/processed/*.pkl
+
+# 保留目录结构
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kaggle API
+kaggle.json
