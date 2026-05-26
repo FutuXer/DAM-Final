@@ -5,7 +5,7 @@
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import StratifiedKFold
 import warnings
 warnings.filterwarnings("ignore")
@@ -111,12 +111,10 @@ def treat_outliers(df):
     # --- DAYS_EMPLOYED: 365243 = 无业 (异常标记值) ---
     mask_unemployed = df["DAYS_EMPLOYED"] == 365243
     df["FLAG_UNEMPLOYED"] = mask_unemployed.astype(np.uint8)
-    df.loc[mask_unemployed, "DAYS_EMPLOYED"] = np.nan
-    # 用中位数填充
-    df["DAYS_EMPLOYED"] = df["DAYS_EMPLOYED"].fillna(df["DAYS_EMPLOYED"].median())
+    df.loc[mask_unemployed, "DAYS_EMPLOYED"] = 0
 
-    # --- OWN_CAR_AGE: 异常值处理 (> 60 年视为异常) ---
-    df.loc[df["OWN_CAR_AGE"] > 60, "OWN_CAR_AGE"] = df["OWN_CAR_AGE"].median()
+    # --- OWN_CAR_AGE: 异常值截断 (> 60 年截断为 60) ---
+    df["OWN_CAR_AGE"] = df["OWN_CAR_AGE"].clip(upper=60)
 
     # --- AMT_INCOME_TOTAL: 上 99% 盖帽 ---
     cap_income = df["AMT_INCOME_TOTAL"].quantile(0.99)
@@ -359,6 +357,42 @@ def engineer_features(df):
 
 
 # ============================================================
+# A7: 数值标准化
+# ============================================================
+def standardize_numerical(train, test=None):
+    """对连续数值列做 Z-score 标准化，排除二值/ID 列."""
+    train = train.copy()
+    if test is not None:
+        test = test.copy()
+
+    exclude_cols = {"SK_ID_CURR", "TARGET"}
+    # 收集所有二值列（0/1 标志列和 One-Hot 列）
+    binary_cols = set()
+    for col in train.columns:
+        if col in exclude_cols:
+            continue
+        if train[col].nunique() <= 2:
+            # 确认确实是 0/1 二值
+            vals = train[col].dropna().unique()
+            if set(vals).issubset({0, 1, 0.0, 1.0}):
+                binary_cols.add(col)
+
+    scale_cols = [c for c in train.columns
+                  if c not in exclude_cols and c not in binary_cols
+                  and train[c].dtype in ["int64", "float64", "int32", "float32"]]
+
+    scaler = StandardScaler()
+    train[scale_cols] = scaler.fit_transform(train[scale_cols])
+    if test is not None:
+        test[scale_cols] = scaler.transform(test[scale_cols])
+
+    print(f"[A7] 标准化完成: {len(scale_cols)} 个数值列已 Z-score 标准化")
+    if test is not None:
+        return train, test
+    return train
+
+
+# ============================================================
 # 主 Pipeline
 # ============================================================
 def process_application_table(train_path, test_path=None, output_dir=PROCESSED_DIR):
@@ -414,10 +448,8 @@ def process_application_table(train_path, test_path=None, output_dir=PROCESSED_D
 
     # 对 test 也做基本的异常值处理
     if test is not None:
-        # 如果是无业标记 (由 train 逻辑复制)
         test["FLAG_UNEMPLOYED"] = (test["DAYS_EMPLOYED"] == 365243).astype(np.uint8)
-        test.loc[test["DAYS_EMPLOYED"] == 365243, "DAYS_EMPLOYED"] = np.nan
-        test["DAYS_EMPLOYED"] = test["DAYS_EMPLOYED"].fillna(train["DAYS_EMPLOYED"].median())
+        test.loc[test["DAYS_EMPLOYED"] == 365243, "DAYS_EMPLOYED"] = 0
 
     # --- A4: 时间特征 (在编码之前做，因为 AGE_BIN 等衍生依赖它) ---
     print("\n" + "-" * 40)
@@ -488,6 +520,13 @@ def process_application_table(train_path, test_path=None, output_dir=PROCESSED_D
             common_cols = list(set(common_cols + ["SK_ID_CURR"]))
         train_clean = train_clean[[c for c in common_cols if c in train_clean.columns]]
         test_clean = test_clean[[c for c in common_cols if c in test_clean.columns]]
+
+    # --- A7: 数值标准化 ---
+    print("\n" + "-" * 40)
+    if test is not None:
+        train_clean, test_clean = standardize_numerical(train_clean, test_clean)
+    else:
+        train_clean = standardize_numerical(train_clean)
 
     # 保存
     train_path_out = f"{output_dir}/processed_application_train.csv"
@@ -584,7 +623,7 @@ def merge_with_features(train_processed, feature_files, output_dir=PROCESSED_DIR
 if __name__ == "__main__":
     import sys
     train_file = sys.argv[1] if len(sys.argv) > 1 else f"{RAW_DIR}/application_train.csv"
-    test_file = sys.argv[2] if len(sys.argv) > 2 else None
+    test_file = sys.argv[2] if len(sys.argv) > 2 else f"{RAW_DIR}/application_test.csv"
 
     result = process_application_table(train_file, test_file)
     if isinstance(result, tuple):
