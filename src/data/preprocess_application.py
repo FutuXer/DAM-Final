@@ -246,117 +246,6 @@ def convert_days_features(df):
 
 
 # ============================================================
-# A5: 特征衍生
-# ============================================================
-def engineer_features(df):
-    """构造领域驱动衍生特征."""
-    df = df.copy()
-
-    # --- 5.1 财务比率 ---
-    # 收入贷款比 (DTI-like)
-    df["INCOME_CREDIT_RATIO"] = df["AMT_INCOME_TOTAL"] / (df["AMT_CREDIT"] + 1)
-    # 年金收入比 (负担率)
-    df["ANNUITY_INCOME_RATIO"] = df["AMT_ANNUITY"] / (df["AMT_INCOME_TOTAL"] + 1)
-    # 贷款商品比 (LTV-like)
-    if "AMT_GOODS_PRICE" in df.columns:
-        df["CREDIT_GOODS_RATIO"] = df["AMT_CREDIT"] / (df["AMT_GOODS_PRICE"] + 1)
-        df["CREDIT_GOODS_RATIO"] = df["CREDIT_GOODS_RATIO"].clip(upper=10)
-    # 年金贷款比 (偿还率)
-    df["ANNUITY_CREDIT_RATIO"] = df["AMT_ANNUITY"] / (df["AMT_CREDIT"] + 1)
-
-    # --- 5.2 外部评分加权组合 ---
-    available_ext = [c for c in EXT_SOURCE_COLS if c in df.columns]
-    if len(available_ext) >= 2:
-        # 按与 TARGET 的相关性加权
-        df["EXT_SOURCE_WEIGHTED"] = df[available_ext].mean(axis=1)
-        df["EXT_SOURCE_MIN"] = df[available_ext].min(axis=1)
-        df["EXT_SOURCE_MAX"] = df[available_ext].max(axis=1)
-        df["EXT_SOURCE_STD"] = df[available_ext].std(axis=1)
-    if "EXT_SOURCE_1" in df.columns and "EXT_SOURCE_2" in df.columns:
-        df["EXT_SOURCE_1x2"] = df["EXT_SOURCE_1"] * df["EXT_SOURCE_2"]
-
-    # --- 5.3 社交圈违约特征 ---
-    df["SOCIAL_DEF_30_RATIO"] = df["DEF_30_CNT_SOCIAL_CIRCLE"] / (df["OBS_30_CNT_SOCIAL_CIRCLE"] + 1)
-    df["SOCIAL_DEF_60_RATIO"] = df["DEF_60_CNT_SOCIAL_CIRCLE"] / (df["OBS_60_CNT_SOCIAL_CIRCLE"] + 1)
-    df["SOCIAL_HAS_DEFAULT"] = ((df["DEF_30_CNT_SOCIAL_CIRCLE"] > 0) |
-                                 (df["DEF_60_CNT_SOCIAL_CIRCLE"] > 0)).astype(np.uint8)
-
-    # --- 5.4 Credit Bureau 查询总次数 ---
-    available_bur = [c for c in BUREAU_ENQUIRY_COLS if c in df.columns]
-    if available_bur:
-        df["BUREAU_ENQUIRY_TOTAL"] = df[available_bur].sum(axis=1)
-
-    # --- 5.5 年龄分箱 ---
-    if "AGE_YEARS" in df.columns:
-        df["AGE_BIN"] = pd.cut(df["AGE_YEARS"],
-                                bins=[0, 25, 35, 45, 55, 65, 120],
-                                labels=["<25", "25-35", "35-45", "45-55", "55-65", "65+"])
-        df["AGE_BIN"] = df["AGE_BIN"].astype(str)  # 后续编码
-        df["AGE_YOUNG"] = (df["AGE_YEARS"] < 30).astype(np.uint8)
-        df["AGE_OLD"] = (df["AGE_YEARS"] > 60).astype(np.uint8)
-
-    # --- 5.6 收入分箱 ---
-    df["INCOME_BIN"] = pd.cut(df["AMT_INCOME_TOTAL"],
-                               bins=[0, 90000, 135000, 180000, 225000, 500000, 1e9],
-                               labels=["very_low", "low", "medium", "high", "very_high", "extreme"])
-    df["INCOME_BIN"] = df["INCOME_BIN"].astype(str)
-
-    # --- 5.7 工作时间相关 ---
-    if "YEARS_EMPLOYED" in df.columns and "AGE_YEARS" in df.columns:
-        # 工作经验占人生比例
-        df["EMPLOYED_AGE_RATIO"] = df["YEARS_EMPLOYED"] / (df["AGE_YEARS"] + 1)
-        df["EMPLOYED_AGE_RATIO"] = df["EMPLOYED_AGE_RATIO"].clip(upper=1.5)
-        # 新入职标记 (< 2 年)
-        df["FLAG_NEW_EMPLOYEE"] = (df["YEARS_EMPLOYED"] < 2).astype(np.uint8)
-
-    # --- 5.8 家庭特征 ---
-    if "CNT_CHILDREN" in df.columns and "CNT_FAM_MEMBERS" in df.columns:
-        df["CHILDREN_RATIO"] = df["CNT_CHILDREN"] / (df["CNT_FAM_MEMBERS"] + 1)
-        df["ADULTS_COUNT"] = df["CNT_FAM_MEMBERS"] - df["CNT_CHILDREN"]
-        df["ADULTS_COUNT"] = df["ADULTS_COUNT"].clip(lower=1)
-
-    # --- 5.9 人均指标 ---
-    df["INCOME_PER_PERSON"] = df["AMT_INCOME_TOTAL"] / (df["CNT_FAM_MEMBERS"] + 1)
-    df["CREDIT_PER_PERSON"] = df["AMT_CREDIT"] / (df["CNT_FAM_MEMBERS"] + 1)
-
-    # --- 5.10 建筑特征均值 ---
-    for base in BUILDING_BASES:
-        cols = [f"{base}_{s}" for s in BUILDING_SUFFIXES if f"{base}_{s}" in df.columns]
-        if len(cols) >= 2:
-            df[f"{base}_MEAN_CROSS"] = df[cols].mean(axis=1)
-
-    # --- 5.11 提供文件总数 ---
-    available_docs = [c for c in DOCUMENT_COLS if c in df.columns]
-    if available_docs:
-        df["DOCUMENTS_PROVIDED"] = df[available_docs].sum(axis=1)
-        df["DOCUMENTS_LOW"] = (df["DOCUMENTS_PROVIDED"] <= 1).astype(np.uint8)
-
-    # --- 5.12 地区评分组合 ---
-    if "REGION_RATING_CLIENT" in df.columns and "REGION_RATING_CLIENT_W_CITY" in df.columns:
-        df["REGION_RATING_COMBO"] = (
-            df["REGION_RATING_CLIENT"].fillna(2) * 0.6 +
-            df["REGION_RATING_CLIENT_W_CITY"].fillna(2) * 0.4
-        )
-
-    # --- 5.13 车辆相关 ---
-    if "OWN_CAR_AGE" in df.columns:
-        df["CAR_AGE_BIN"] = pd.cut(df["OWN_CAR_AGE"].fillna(-1),
-                                    bins=[-2, 0, 5, 10, 15, 20, 100],
-                                    labels=["no_car", "<5", "5-10", "10-15", "15-20", "20+"])
-        df["CAR_AGE_BIN"] = df["CAR_AGE_BIN"].astype(str)
-
-    # --- 5.14 注册/身份证时间差 ---
-    if "YEARS_REGISTRATION" in df.columns and "YEARS_ID_PUBLISH" in df.columns:
-        df["REGISTRATION_ID_GAP"] = (
-            df["YEARS_REGISTRATION"] - df["YEARS_ID_PUBLISH"]
-        ).abs()
-        df["REGISTRATION_RECENT"] = (df["YEARS_REGISTRATION"] < 2).astype(np.uint8)
-
-    print(f"[A5] 特征衍生完成，当前维度: {df.shape[1]}")
-    return df
-
-
-# ============================================================
 # A7: 数值标准化
 # ============================================================
 def standardize_numerical(train, test=None):
@@ -457,22 +346,9 @@ def process_application_table(train_path, test_path=None, output_dir=PROCESSED_D
     if test is not None:
         test = convert_days_features(test)
 
-    # --- A5: 特征衍生 ---
+    # --- A3: 类别编码 ---
     print("\n" + "-" * 40)
-    train = engineer_features(train)
-    if test is not None:
-        test = engineer_features(test)
-
-    # --- A3: 类别编码 (放在衍生之后，因为 AGE_BIN/INCOME_BIN 等需要编码) ---
-    print("\n" + "-" * 40)
-    # 将新增的类别衍生列也加入编码列表
-    extra_cat = []
-    for col in ["AGE_BIN", "INCOME_BIN", "CAR_AGE_BIN"]:
-        if col in train.columns:
-            extra_cat.append(col)
-    cat_cols_all = CAT_COLS_NOMINAL + extra_cat
-    # 用 DataFrame 临时存储类别列配置
-    CAT_COLS_NOMINAL_EXT = [c for c in cat_cols_all if c in train.columns]
+    CAT_COLS_NOMINAL_EXT = [c for c in CAT_COLS_NOMINAL if c in train.columns]
 
     # 调用编码
     if test is not None:
