@@ -1,11 +1,11 @@
 """
-队员 A — POS_CASH_balance 表特征工程 Pipeline
+队员 C — POS_CASH_balance 表特征工程 Pipeline
 处理 POS_CASH_balance.csv (POS/现金贷月度快照)
 输出: 按 SK_ID_CURR 聚合的特征矩阵
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 
 # ============================================================
 # 配置
@@ -111,16 +111,20 @@ def aggregate_to_prev(df):
         PC_MONTHS_ABS_MAX=("PC_MONTHS_ABS", "max"),
     ).reset_index()
 
-    # 首月/末月趋势
-    first = df.loc[df.groupby("SK_ID_PREV")["MONTHS_BALANCE"].idxmax()]
-    last = df.loc[df.groupby("SK_ID_PREV")["MONTHS_BALANCE"].idxmin()]
+    # 首月/末月趋势 (用 merge 避免 .values 对齐风险)
+    first_idx = df.groupby("SK_ID_PREV")["MONTHS_BALANCE"].idxmax()
+    last_idx = df.groupby("SK_ID_PREV")["MONTHS_BALANCE"].idxmin()
 
-    agg["PC_TREND_DPD"] = last["SK_DPD"].values - first["SK_DPD"].values
-    agg["PC_TREND_REMAINING"] = (
-        first["CNT_INSTALMENT_FUTURE"].values - last["CNT_INSTALMENT_FUTURE"].values
-    )
-    agg["PC_FIRST_DPD"] = first["SK_DPD"].values
-    agg["PC_LAST_DPD"] = last["SK_DPD"].values
+    first = df.loc[first_idx, ["SK_ID_PREV", "SK_DPD", "CNT_INSTALMENT_FUTURE"]].copy()
+    first.columns = ["SK_ID_PREV", "PC_FIRST_DPD", "PC_FIRST_REMAINING"]
+
+    last = df.loc[last_idx, ["SK_ID_PREV", "SK_DPD", "CNT_INSTALMENT_FUTURE"]].copy()
+    last.columns = ["SK_ID_PREV", "PC_LAST_DPD", "PC_LAST_REMAINING"]
+
+    agg = agg.merge(first, on="SK_ID_PREV", how="left")
+    agg = agg.merge(last, on="SK_ID_PREV", how="left")
+    agg["PC_TREND_DPD"] = agg["PC_LAST_DPD"] - agg["PC_FIRST_DPD"]
+    agg["PC_TREND_REMAINING"] = agg["PC_FIRST_REMAINING"] - agg["PC_LAST_REMAINING"]
 
     # 还款速度 (每月完成的期数)
     agg["PC_PAYMENT_SPEED"] = (
@@ -197,21 +201,6 @@ def aggregate_to_client(df_prev_agg, df_raw):
 
 
 # ============================================================
-# PC6: 标准化
-# ============================================================
-def standardize_pc(df):
-    df = df.copy()
-    exclude = {"SK_ID_CURR"}
-    scale_cols = [c for c in df.columns
-                  if c not in exclude and df[c].dtype in ["float64", "int64", "float32", "int32"]
-                  and df[c].nunique() > 2]
-    scaler = StandardScaler()
-    df[scale_cols] = scaler.fit_transform(df[scale_cols])
-    print(f"[PC6] 标准化完成: {len(scale_cols)} 列")
-    return df
-
-
-# ============================================================
 # 主 Pipeline
 # ============================================================
 def process_pos_cash_table(
@@ -219,7 +208,7 @@ def process_pos_cash_table(
     output_dir=PROCESSED_DIR,
 ):
     print("=" * 60)
-    print("队员 A — POS_CASH_balance 表特征工程 Pipeline")
+    print("队员 C — POS_CASH_balance 表特征工程 Pipeline")
     print("=" * 60)
 
     print(f"\n[加载] 读取 {pc_path}...")
@@ -246,10 +235,7 @@ def process_pos_cash_table(
     print("\n" + "-" * 40)
     client_features = aggregate_to_client(prev_agg, pc)
 
-    # --- PC6: 标准化 ---
-    print("\n" + "-" * 40)
-    client_features = standardize_pc(client_features)
-
+    # 保存 (不在此时标准化，统一交给队员 D 处理)
     out_path = f"{output_dir}/processed_pos_cash_balance.csv"
     client_features.to_csv(out_path, index=False)
     print(f"\n[保存] → {out_path} ({client_features.shape})")

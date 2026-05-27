@@ -1,11 +1,10 @@
 """
-队员 A — installments_payments 表特征工程 Pipeline
+队员 C — installments_payments 表特征工程 Pipeline
 处理 installments_payments.csv (分期还款流水)
 输出: 按 SK_ID_CURR 聚合的分期还款行为特征
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 
 # ============================================================
 # 配置
@@ -100,14 +99,18 @@ def aggregate_to_prev(df):
         IP_INSTALMENT_VERSION_CHANGES=("NUM_INSTALMENT_VERSION", "nunique"),
     ).reset_index()
 
-    # 首期/末期行为对比
-    first = df.loc[df.groupby("SK_ID_PREV")["NUM_INSTALMENT_NUMBER"].idxmin()]
-    last = df.loc[df.groupby("SK_ID_PREV")["NUM_INSTALMENT_NUMBER"].idxmax()]
+    # 首期/末期行为对比 (用 merge 避免 .values 对齐风险)
+    first_idx = df.groupby("SK_ID_PREV")["NUM_INSTALMENT_NUMBER"].idxmin()
+    last_idx = df.groupby("SK_ID_PREV")["NUM_INSTALMENT_NUMBER"].idxmax()
 
-    agg["IP_FIRST_PAYMENT_DELAY"] = first["IP_PAYMENT_DELAY"].values
-    agg["IP_LAST_PAYMENT_DELAY"] = last["IP_PAYMENT_DELAY"].values
-    agg["IP_FIRST_PAYMENT_RATIO"] = first["IP_PAYMENT_RATIO"].values
-    agg["IP_LAST_PAYMENT_RATIO"] = last["IP_PAYMENT_RATIO"].values
+    first = df.loc[first_idx, ["SK_ID_PREV", "IP_PAYMENT_DELAY", "IP_PAYMENT_RATIO"]].copy()
+    first.columns = ["SK_ID_PREV", "IP_FIRST_PAYMENT_DELAY", "IP_FIRST_PAYMENT_RATIO"]
+
+    last = df.loc[last_idx, ["SK_ID_PREV", "IP_PAYMENT_DELAY", "IP_PAYMENT_RATIO"]].copy()
+    last.columns = ["SK_ID_PREV", "IP_LAST_PAYMENT_DELAY", "IP_LAST_PAYMENT_RATIO"]
+
+    agg = agg.merge(first, on="SK_ID_PREV", how="left")
+    agg = agg.merge(last, on="SK_ID_PREV", how="left")
     agg["IP_DELAY_TREND"] = agg["IP_LAST_PAYMENT_DELAY"] - agg["IP_FIRST_PAYMENT_DELAY"]
 
     # 最近 N 期行为
@@ -139,7 +142,6 @@ def aggregate_to_prev(df):
 def aggregate_to_client(df_prev_agg, df_raw):
     print(f"[IP4] 聚合到 SK_ID_CURR，输入贷款级: {df_prev_agg.shape}")
 
-    # 需要 SK_ID_CURR 的映射
     prev_to_curr = df_raw[["SK_ID_PREV", "SK_ID_CURR"]].drop_duplicates()
     df = df_prev_agg.merge(prev_to_curr, on="SK_ID_PREV", how="left")
 
@@ -186,21 +188,6 @@ def aggregate_to_client(df_prev_agg, df_raw):
 
 
 # ============================================================
-# IP5: 标准化
-# ============================================================
-def standardize_ip(df):
-    df = df.copy()
-    exclude = {"SK_ID_CURR"}
-    scale_cols = [c for c in df.columns
-                  if c not in exclude and df[c].dtype in ["float64", "int64", "float32", "int32"]
-                  and df[c].nunique() > 2]
-    scaler = StandardScaler()
-    df[scale_cols] = scaler.fit_transform(df[scale_cols])
-    print(f"[IP5] 标准化完成: {len(scale_cols)} 列")
-    return df
-
-
-# ============================================================
 # 主 Pipeline
 # ============================================================
 def process_installments_table(
@@ -208,7 +195,7 @@ def process_installments_table(
     output_dir=PROCESSED_DIR,
 ):
     print("=" * 60)
-    print("队员 A — installments_payments 表特征工程 Pipeline")
+    print("队员 C — installments_payments 表特征工程 Pipeline")
     print("=" * 60)
 
     print(f"\n[加载] 读取 {ip_path}...")
@@ -231,10 +218,7 @@ def process_installments_table(
     print("\n" + "-" * 40)
     client_features = aggregate_to_client(prev_agg, ip)
 
-    # --- IP5: 标准化 ---
-    print("\n" + "-" * 40)
-    client_features = standardize_ip(client_features)
-
+    # 保存 (不在此时标准化，统一交给队员 D 处理)
     out_path = f"{output_dir}/processed_installments_payments.csv"
     client_features.to_csv(out_path, index=False)
     print(f"\n[保存] → {out_path} ({client_features.shape})")

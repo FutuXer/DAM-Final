@@ -1,11 +1,11 @@
 """
-队员 A — credit_card_balance 表特征工程 Pipeline
+队员 C — credit_card_balance 表特征工程 Pipeline
 处理 credit_card_balance.csv (月度信用卡余额快照)
 输出: 按 SK_ID_CURR 聚合的特征矩阵
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 
 # ============================================================
 # 配置
@@ -41,12 +41,10 @@ RECENT_MONTHS_THRESHOLD = -6
 def clean_and_fill_cc(df):
     df = df.copy()
 
-    # 计数列统一转为整数
     for col in CNT_COLS:
         if col in df.columns:
             df[col] = df[col].fillna(0).astype(int)
 
-    # 缺失值填充
     for col in df.columns:
         if col in ["SK_ID_PREV", "SK_ID_CURR"]:
             continue
@@ -206,20 +204,23 @@ def aggregate_cc_to_client(df):
 
         agg_all = agg_all.merge(agg_recent, on="SK_ID_CURR", how="left")
 
-    # 每月行为趋势 (首月 vs 末月)
-    first_month = df.loc[df.groupby("SK_ID_CURR")["MONTHS_BALANCE"].idxmax()]
-    last_month = df.loc[df.groupby("SK_ID_CURR")["MONTHS_BALANCE"].idxmin()]
+    # 每月行为趋势 (用 merge 避免 .values 对齐风险)
+    first_idx = df.groupby("SK_ID_CURR")["MONTHS_BALANCE"].idxmax()
+    last_idx = df.groupby("SK_ID_CURR")["MONTHS_BALANCE"].idxmin()
 
-    trend = first_month[["SK_ID_CURR"]].copy()
+    first_month = df.loc[first_idx, ["SK_ID_CURR", "AMT_BALANCE", "CC_LIMIT_USAGE", "SK_DPD"]].copy()
+    first_month.columns = ["SK_ID_CURR", "CC_FIRST_BALANCE", "CC_FIRST_LIMIT_USAGE", "CC_FIRST_DPD"]
+
+    last_month = df.loc[last_idx, ["SK_ID_CURR", "AMT_BALANCE", "CC_LIMIT_USAGE", "SK_DPD"]].copy()
+    last_month.columns = ["SK_ID_CURR", "CC_LAST_BALANCE", "CC_LAST_LIMIT_USAGE", "CC_LAST_DPD"]
+
+    trend = first_month.merge(last_month, on="SK_ID_CURR", how="left")
     trend["CC_TREND_BALANCE"] = (
-        last_month["AMT_BALANCE"].values - first_month["AMT_BALANCE"].values
-    ) / (first_month["AMT_BALANCE"].abs().values + 1)
-    trend["CC_TREND_LIMIT_USAGE"] = (
-        last_month["CC_LIMIT_USAGE"].values - first_month["CC_LIMIT_USAGE"].values
-    )
-    trend["CC_TREND_DPD"] = (
-        last_month["SK_DPD"].values - first_month["SK_DPD"].values
-    )
+        trend["CC_LAST_BALANCE"] - trend["CC_FIRST_BALANCE"]
+    ) / (trend["CC_FIRST_BALANCE"].abs() + 1)
+    trend["CC_TREND_LIMIT_USAGE"] = trend["CC_LAST_LIMIT_USAGE"] - trend["CC_FIRST_LIMIT_USAGE"]
+    trend["CC_TREND_DPD"] = trend["CC_LAST_DPD"] - trend["CC_FIRST_DPD"]
+    trend = trend[["SK_ID_CURR", "CC_TREND_BALANCE", "CC_TREND_LIMIT_USAGE", "CC_TREND_DPD"]]
 
     agg_all = agg_all.merge(trend, on="SK_ID_CURR", how="left")
 
@@ -231,7 +232,6 @@ def aggregate_cc_to_client(df):
         agg_all["CC_CREDIT_LIMIT_MEAN"] > 0
     ).astype(int)
 
-    # 填充聚合产生的缺失值
     for col in agg_all.columns:
         if col == "SK_ID_CURR":
             continue
@@ -243,21 +243,6 @@ def aggregate_cc_to_client(df):
 
 
 # ============================================================
-# C5: 标准化
-# ============================================================
-def standardize_cc(df):
-    df = df.copy()
-    exclude = {"SK_ID_CURR"}
-    scale_cols = [c for c in df.columns
-                  if c not in exclude and df[c].dtype in ["float64", "int64", "float32", "int32"]
-                  and df[c].nunique() > 2]
-    scaler = StandardScaler()
-    df[scale_cols] = scaler.fit_transform(df[scale_cols])
-    print(f"[C5] 标准化完成: {len(scale_cols)} 列")
-    return df
-
-
-# ============================================================
 # 主 Pipeline
 # ============================================================
 def process_credit_card_table(
@@ -265,10 +250,9 @@ def process_credit_card_table(
     output_dir=PROCESSED_DIR,
 ):
     print("=" * 60)
-    print("队员 A — credit_card_balance 表特征工程 Pipeline")
+    print("队员 C — credit_card_balance 表特征工程 Pipeline")
     print("=" * 60)
 
-    # 加载
     print(f"\n[加载] 读取 {cc_path}...")
     cc = pd.read_csv(cc_path)
     print(f"  credit_card_balance: {cc.shape}")
@@ -289,11 +273,7 @@ def process_credit_card_table(
     print("\n" + "-" * 40)
     client_features = aggregate_cc_to_client(cc)
 
-    # --- C5: 标准化 ---
-    print("\n" + "-" * 40)
-    client_features = standardize_cc(client_features)
-
-    # 保存
+    # 保存 (不在此时标准化，统一交给队员 D 处理)
     out_path = f"{output_dir}/processed_credit_card_balance.csv"
     client_features.to_csv(out_path, index=False)
     print(f"\n[保存] → {out_path} ({client_features.shape})")

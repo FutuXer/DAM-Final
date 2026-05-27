@@ -1,11 +1,11 @@
 """
-队员 A — bureau 表特征工程 Pipeline
+队员 B — bureau 表特征工程 Pipeline
 处理 bureau.csv + bureau_balance.csv
 输出: 按 SK_ID_CURR 聚合的特征矩阵
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 
 # ============================================================
 # 配置
@@ -102,9 +102,6 @@ def engineer_bureau_features(df):
     df["BUREAU_HAS_OVERDUE"] = (df["CREDIT_DAY_OVERDUE"] > 0).astype(np.uint8)
     df["BUREAU_HAS_MAX_OVERDUE"] = (df["AMT_CREDIT_MAX_OVERDUE"] > 0).astype(np.uint8)
 
-    # --- 是否主动贷款 ---
-    df["BUREAU_FLAG_ACTIVE"] = (df["CREDIT_ACTIVE"] == 0).astype(np.uint8)
-
     # --- 贷款期限 (年) ---
     if "YEARS_CREDIT_ENDDATE" in df.columns and "YEARS_CREDIT" in df.columns:
         df["BUREAU_CREDIT_DURATION"] = (
@@ -130,7 +127,7 @@ def process_balance(df_balance):
 
     STATUS_ORDER = {str(i): i for i in range(6)}
     STATUS_ORDER["C"] = 0
-    STATUS_ORDER["X"] = 0
+    STATUS_ORDER["X"] = np.nan
 
     df = df_balance.copy()
     df["STATUS_NUM"] = df["STATUS"].map(STATUS_ORDER).fillna(0)
@@ -233,20 +230,6 @@ def aggregate_to_client(df):
     return agg
 
 
-# ============================================================
-# B7: 标准化
-# ============================================================
-def standardize_bureau(df):
-    df = df.copy()
-    exclude = {"SK_ID_CURR", "TARGET"}
-    scale_cols = [c for c in df.columns
-                  if c not in exclude and df[c].dtype in ["float64", "int64", "float32", "int32"]
-                  and df[c].nunique() > 2]
-    scaler = StandardScaler()
-    df[scale_cols] = scaler.fit_transform(df[scale_cols])
-    print(f"[B7] 标准化完成: {len(scale_cols)} 列")
-    return df
-
 
 # ============================================================
 # 主 Pipeline
@@ -258,7 +241,7 @@ def process_bureau_table(
     use_balance=True,
 ):
     print("=" * 60)
-    print("队员 A — bureau 表特征工程 Pipeline")
+    print("队员 B — bureau 表特征工程 Pipeline")
     print("=" * 60)
 
     # 加载
@@ -275,7 +258,8 @@ def process_bureau_table(
     print("\n" + "-" * 40)
     bureau = convert_days_bureau(bureau)
 
-    # --- B3: 类别编码 ---
+    # --- B3: 类别编码 (编码前标记活跃信用，保留原始字符串语义) ---
+    bureau["BUREAU_FLAG_ACTIVE"] = (bureau["CREDIT_ACTIVE"] == "Active").astype(np.uint8)
     print("\n" + "-" * 40)
     bureau = encode_bureau(bureau)
 
@@ -300,12 +284,8 @@ def process_bureau_table(
     print("\n" + "-" * 40)
     client_features = aggregate_to_client(bureau)
 
-    # --- B7: 标准化 ---
-    print("\n" + "-" * 40)
-    client_features = standardize_bureau(client_features)
-
-    # 保存
-    out_path = f"{output_dir}/processed_bureau.csv"
+    # 保存 (不在此时标准化，统一交给队员 D 处理)
+    out_path = f"{output_dir}/features_bureau.csv"
     client_features.to_csv(out_path, index=False)
     print(f"\n[保存] → {out_path} ({client_features.shape})")
     print("\n" + "=" * 60)

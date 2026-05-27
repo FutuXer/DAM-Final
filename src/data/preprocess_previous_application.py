@@ -1,11 +1,11 @@
 """
-队员 A — previous_application 表特征工程 Pipeline
+队员 C — previous_application 表特征工程 Pipeline
 处理 previous_application.csv (历史申请记录)
 输出: 按 SK_ID_CURR 聚合的特征矩阵
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 
 # ============================================================
 # 配置
@@ -202,19 +202,18 @@ def aggregate_to_client(df):
         PA_APPLY_NIGHT_RATIO=("PA_APPLY_NIGHT", "mean"),
     ).reset_index()
 
-    # 最近一次申请的行为
+    # 最近一次申请的行为 (用 merge 避免 .values 对齐风险)
     last_idx = df.groupby("SK_ID_CURR")["YEARS_DECISION"].idxmin()
-    last_app = df.loc[last_idx, :]
-
-    last_features = last_app[[
+    last_app = df.loc[last_idx, [
         "SK_ID_CURR", "AMT_CREDIT", "AMT_APPLICATION", "AMT_ANNUITY",
         "PA_DOWN_PAYMENT_RATIO", "PA_ANNUITY_CREDIT_RATIO",
         "PA_CREDIT_DURATION", "PA_IS_REJECTED",
     ]].copy()
-    last_features.columns = ["SK_ID_CURR"] + [
-        f"PA_LAST_{c}" for c in last_features.columns if c != "SK_ID_CURR"
+    last_app.columns = ["SK_ID_CURR"] + [
+        f"PA_LAST_{c}" if not c.startswith("PA_") else f"PA_LAST_{c[3:]}"
+        for c in last_app.columns if c != "SK_ID_CURR"
     ]
-    agg = agg.merge(last_features, on="SK_ID_CURR", how="left")
+    agg = agg.merge(last_app, on="SK_ID_CURR", how="left")
 
     # 不同产品的申请数量
     if "NAME_PORTFOLIO" in df.columns:
@@ -249,21 +248,6 @@ def aggregate_to_client(df):
 
 
 # ============================================================
-# PA6: 标准化
-# ============================================================
-def standardize_pa(df):
-    df = df.copy()
-    exclude = {"SK_ID_CURR"}
-    scale_cols = [c for c in df.columns
-                  if c not in exclude and df[c].dtype in ["float64", "int64", "float32", "int32"]
-                  and df[c].nunique() > 2]
-    scaler = StandardScaler()
-    df[scale_cols] = scaler.fit_transform(df[scale_cols])
-    print(f"[PA6] 标准化完成: {len(scale_cols)} 列")
-    return df
-
-
-# ============================================================
 # 主 Pipeline
 # ============================================================
 def process_previous_application_table(
@@ -271,7 +255,7 @@ def process_previous_application_table(
     output_dir=PROCESSED_DIR,
 ):
     print("=" * 60)
-    print("队员 A — previous_application 表特征工程 Pipeline")
+    print("队员 C — previous_application 表特征工程 Pipeline")
     print("=" * 60)
 
     print(f"\n[加载] 读取 {pa_path}...")
@@ -298,10 +282,7 @@ def process_previous_application_table(
     print("\n" + "-" * 40)
     client_features = aggregate_to_client(pa)
 
-    # --- PA6: 标准化 ---
-    print("\n" + "-" * 40)
-    client_features = standardize_pa(client_features)
-
+    # 保存 (不在此时标准化，统一交给队员 D 处理)
     out_path = f"{output_dir}/processed_previous_application.csv"
     client_features.to_csv(out_path, index=False)
     print(f"\n[保存] → {out_path} ({client_features.shape})")
