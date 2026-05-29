@@ -245,8 +245,128 @@ def convert_days_features(df):
     return df
 
 
+# ============================================================# A5: 特征衍生（14 类，净增约 70 列）
 # ============================================================
-# A7: 数值标准化
+def engineer_features(df):
+    """实现主表特征衍生，对应 ProjDsgn.md 第 4.2 节 A5 的 14 类特征. """
+    df = df.copy()
+
+    # ==================== 1. 财务比率 ====================
+    df["INCOME_CREDIT_RATIO"] = df["AMT_INCOME_TOTAL"] / (df["AMT_CREDIT"] + 1)
+    df["ANNUITY_INCOME_RATIO"] = df["AMT_ANNUITY"] / (df["AMT_INCOME_TOTAL"] + 1)
+    df["CREDIT_GOODS_RATIO"] = df["AMT_CREDIT"] / (df["AMT_GOODS_PRICE"] + 1)
+    df["ANNUITY_CREDIT_RATIO"] = df["AMT_ANNUITY"] / (df["AMT_CREDIT"] + 1)
+
+    # 截尾防止极端值
+    for col in ["INCOME_CREDIT_RATIO", "ANNUITY_INCOME_RATIO",
+                 "CREDIT_GOODS_RATIO", "ANNUITY_CREDIT_RATIO"]:
+        upper = df[col].quantile(0.99)
+        df[col] = df[col].clip(upper=upper)
+
+    # ==================== 2. 外部评分组合 ====================
+    ext_cols = [c for c in EXT_SOURCE_COLS if c in df.columns]
+    if ext_cols:
+        df["EXT_SOURCE_WEIGHTED"] = df[ext_cols].mean(axis=1)
+        df["EXT_SOURCE_MIN"] = df[ext_cols].min(axis=1)
+        df["EXT_SOURCE_MAX"] = df[ext_cols].max(axis=1)
+        df["EXT_SOURCE_STD"] = df[ext_cols].std(axis=1)
+        if "EXT_SOURCE_1" in df.columns and "EXT_SOURCE_2" in df.columns:
+            df["EXT_SOURCE_1x2"] = df["EXT_SOURCE_1"] * df["EXT_SOURCE_2"]
+
+    # ==================== 3. 社交圈违约率 ====================
+    if "DEF_30_CNT_SOCIAL_CIRCLE" in df.columns and "OBS_30_CNT_SOCIAL_CIRCLE" in df.columns:
+        df["SOCIAL_DEF_30_RATIO"] = df["DEF_30_CNT_SOCIAL_CIRCLE"] / (df["OBS_30_CNT_SOCIAL_CIRCLE"] + 1)
+        df["SOCIAL_HAS_DEFAULT"] = (df["DEF_30_CNT_SOCIAL_CIRCLE"] > 0).astype(np.uint8)
+    if "DEF_60_CNT_SOCIAL_CIRCLE" in df.columns and "OBS_60_CNT_SOCIAL_CIRCLE" in df.columns:
+        df["SOCIAL_DEF_60_RATIO"] = df["DEF_60_CNT_SOCIAL_CIRCLE"] / (df["OBS_60_CNT_SOCIAL_CIRCLE"] + 1)
+
+    # ==================== 4. 征信局查询总量 ====================
+    bureau_cols = [c for c in BUREAU_ENQUIRY_COLS if c in df.columns]
+    if bureau_cols:
+        df["BUREAU_ENQUIRY_TOTAL"] = df[bureau_cols].sum(axis=1)
+
+    # ==================== 5. 年龄分箱 ====================
+    if "AGE_YEARS" in df.columns:
+        age = df["AGE_YEARS"]
+        df["AGE_YOUNG"] = (age < 30).astype(np.uint8)
+        df["AGE_OLD"] = (age > 60).astype(np.uint8)
+        df["AGE_BIN"] = pd.cut(
+            age,
+            bins=[0, 25, 35, 45, 55, 65, 200],
+            labels=["AGE_18-25", "AGE_26-35", "AGE_36-45",
+                    "AGE_46-55", "AGE_56-65", "AGE_65+"],
+        )
+
+    # ==================== 6. 收入分箱 ====================
+    if "AMT_INCOME_TOTAL" in df.columns:
+        income = df["AMT_INCOME_TOTAL"]
+        df["INCOME_BIN"] = pd.cut(
+            income,
+            bins=[0, 50000, 100000, 150000, 200000, 300000, 1e10],
+            labels=["INC_0-50k", "INC_50-100k", "INC_100-150k",
+                    "INC_150-200k", "INC_200-300k", "INC_300k+"],
+        )
+
+    # ==================== 7. 工作特征 ====================
+    if "AGE_YEARS" in df.columns and "YEARS_EMPLOYED" in df.columns:
+        df["EMPLOYED_AGE_RATIO"] = df["YEARS_EMPLOYED"] / (df["AGE_YEARS"] + 0.5)
+    if "YEARS_EMPLOYED" in df.columns:
+        df["FLAG_NEW_EMPLOYEE"] = (df["YEARS_EMPLOYED"] < 2).astype(np.uint8)
+
+    # ==================== 8. 家庭结构 ====================
+    if "CNT_CHILDREN" in df.columns and "CNT_FAM_MEMBERS" in df.columns:
+        df["CHILDREN_RATIO"] = df["CNT_CHILDREN"] / (df["CNT_FAM_MEMBERS"] + 0.5)
+        df["ADULTS_COUNT"] = (df["CNT_FAM_MEMBERS"] - df["CNT_CHILDREN"]).clip(lower=1)
+
+    # ==================== 9. 人均指标 ====================
+    if "AMT_INCOME_TOTAL" in df.columns and "CNT_FAM_MEMBERS" in df.columns:
+        df["INCOME_PER_PERSON"] = df["AMT_INCOME_TOTAL"] / df["CNT_FAM_MEMBERS"]
+    if "AMT_CREDIT" in df.columns and "CNT_FAM_MEMBERS" in df.columns:
+        df["CREDIT_PER_PERSON"] = df["AMT_CREDIT"] / df["CNT_FAM_MEMBERS"]
+
+    # ==================== 10. 建筑特征交叉均值 ====================
+    for base in BUILDING_BASES:
+        cols = [f"{base}_{suf}" for suf in BUILDING_SUFFIXES if f"{base}_{suf}" in df.columns]
+        if len(cols) >= 2:
+            df[f"{base}_COMBINED_MEAN"] = df[cols].mean(axis=1)
+
+    # ==================== 11. 文件提供数 ====================
+    doc_cols = [c for c in DOCUMENT_COLS if c in df.columns]
+    if doc_cols:
+        df["DOCUMENTS_PROVIDED"] = df[doc_cols].sum(axis=1)
+        df["DOCUMENTS_LOW"] = (df["DOCUMENTS_PROVIDED"] <= 3).astype(np.uint8)
+
+    # ==================== 12. 地区评分组合 ====================
+    if "REGION_RATING_CLIENT" in df.columns and "REGION_RATING_CLIENT_W_CITY" in df.columns:
+        df["REGION_RATING_COMBO"] = (
+            df["REGION_RATING_CLIENT"].astype(str) + "_" +
+            df["REGION_RATING_CLIENT_W_CITY"].astype(str)
+        )
+
+    # ==================== 13. 车辆年龄分箱 ====================
+    if "OWN_CAR_AGE" in df.columns:
+        car_age = df["OWN_CAR_AGE"].fillna(0)
+        df["CAR_AGE_BIN"] = pd.cut(
+            car_age,
+            bins=[-1, 0, 5, 10, 20, 100],
+            labels=["NO_CAR", "CAR_0-5", "CAR_5-10", "CAR_10-20", "CAR_20+"],
+        )
+        # 修复: NO_CAR 为 0 年但不拥有车的情况由 FLAG_OWN_CAR 决定
+        if "FLAG_OWN_CAR" in df.columns:
+            mask_no_car = df["FLAG_OWN_CAR"] == 0
+            df.loc[mask_no_car, "CAR_AGE_BIN"] = "NO_CAR"
+
+    # ==================== 14. 注册/身份证时间差 ====================
+    if "YEARS_REGISTRATION" in df.columns and "YEARS_ID_PUBLISH" in df.columns:
+        df["REGISTRATION_ID_GAP"] = df["YEARS_REGISTRATION"] - df["YEARS_ID_PUBLISH"]
+    if "YEARS_REGISTRATION" in df.columns:
+        df["REGISTRATION_RECENT"] = (df["YEARS_REGISTRATION"] < 2).astype(np.uint8)
+
+    print(f"[A5] 特征衍生完成: {df.shape[1]} 列 (净增约 {df.shape[1] - len(DAYS_COLS) - 20} 列)")
+    return df
+
+
+# ============================================================# A7: 数值标准化
 # ============================================================
 def standardize_numerical(train, test=None):
     """对连续数值列做 Z-score 标准化，排除二值/ID 列."""
@@ -345,6 +465,12 @@ def process_application_table(train_path, test_path=None, output_dir=PROCESSED_D
     train = convert_days_features(train)
     if test is not None:
         test = convert_days_features(test)
+
+    # --- A5: 特征衍生 (在编码之前做，产生分箱列等类别特征) ---
+    print("\n" + "-" * 40)
+    train = engineer_features(train)
+    if test is not None:
+        test = engineer_features(test)
 
     # --- A3: 类别编码 ---
     print("\n" + "-" * 40)
