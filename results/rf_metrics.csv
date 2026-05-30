@@ -1,0 +1,2 @@
+best_params,cv_auc,val_auc,val_ap,val_log_loss,val_f1
+"{'n_estimators': 400, 'min_samples_leaf': 50, 'max_depth': None}",0.7635,0.7688,0.2562,0.4515,0.3127

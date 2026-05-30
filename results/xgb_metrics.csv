@@ -1,0 +1,2 @@
+best_params,cv_auc,val_auc,val_ap,val_log_loss,val_f1
+"{'subsample': 0.8, 'max_depth': 4, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",0.7817,0.7865,0.2863,0.5312,0.2982

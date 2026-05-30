@@ -1,0 +1,2 @@
+best_C,cv_auc,val_auc,val_ap,val_log_loss,val_f1
+0.01,0.7687,0.7719,0.2611,0.5689,0.2783

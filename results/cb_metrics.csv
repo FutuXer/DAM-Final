@@ -1,0 +1,2 @@
+best_params,cv_auc,val_auc,val_ap,val_log_loss,val_f1
+"{'depth': 4, 'iterations': 500, 'learning_rate': 0.1}",0.7822,0.7877,0.2904,0.2966,0.3184

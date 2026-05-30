@@ -1,0 +1,2 @@
+best_params,cv_auc,val_auc,val_ap,val_log_loss,val_f1
+"{'subsample': 0.8, 'num_leaves': 31, 'min_child_samples': 100, 'learning_rate': 0.03, 'feature_fraction': 0.8}",0.7752,0.7813,0.2766,1.5582,0.1731
